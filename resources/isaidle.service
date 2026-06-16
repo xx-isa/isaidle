@@ -1,0 +1,13 @@
+[Unit]
+Description=Idle management daemon
+PartOf=graphical-session.target
+After=graphical-session.target
+Requisite=graphical-session.target
+
+[Service]
+ExecStart=%h/.cargo/bin/isaidle
+Restart=on-failure
+Type=notify
+
+[Install]
+WantedBy=graphical-session.target
