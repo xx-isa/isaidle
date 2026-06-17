@@ -6,7 +6,7 @@ mod wayland;
 use futures_util::StreamExt;
 use logind::SessionProxy;
 use niri_ipc::{socket::Socket, Action, Request};
-use rules::{Action as RuleAction, Phase, Rule};
+use rules::{Action as RuleAction, Scope, Rule};
 use state::{DaemonState, Event};
 use std::sync::mpsc as std_mpsc;
 use std::time::Duration;
@@ -60,8 +60,8 @@ async fn main() -> anyhow::Result<()> {
 
     let mut state = DaemonState::new();
 
-    // Activate rules for the initial phase.
-    send_phase_rules(Phase::Unlocked, &rules, &cmd_tx);
+    // Activate rules for the initial scope.
+    send_scope_rules(Scope::Unlocked, &rules, &cmd_tx);
 
     while let Some(event) = rx.recv().await {
         handle_event(event, &mut state, &rules, &cmd_tx, &session);
@@ -73,13 +73,19 @@ async fn main() -> anyhow::Result<()> {
 fn build_rules() -> Vec<Rule> {
     vec![
         Rule {
-            phase: Phase::Unlocked,
+            scope: Scope::Unlocked,
+            timeout: Duration::from_secs(30),
+            action: RuleAction::DpmsOff,
+            on_exit: Some(RuleAction::DpmsOn),
+        },
+        Rule {
+            scope: Scope::Unlocked,
             timeout: Duration::from_secs(60),
             action: RuleAction::LockSession,
             on_exit: None,
         },
         Rule {
-            phase: Phase::Locked,
+            scope: Scope::Locked,
             timeout: Duration::from_secs(10),
             action: RuleAction::DpmsOff,
             on_exit: Some(RuleAction::DpmsOn),
@@ -87,18 +93,18 @@ fn build_rules() -> Vec<Rule> {
     ]
 }
 
-fn send_phase_rules(phase: Phase, rules: &[Rule], cmd_tx: &std_mpsc::SyncSender<WlCommand>) {
+fn send_scope_rules(scope: Scope, rules: &[Rule], cmd_tx: &std_mpsc::SyncSender<WlCommand>) {
     let active: Vec<(usize, Duration)> = rules
         .iter()
         .enumerate()
-        .filter(|(_, r)| r.phase == phase)
+        .filter(|(_, r)| r.scope == scope)
         .map(|(i, r)| (i, r.timeout))
         .collect();
-    let _ = cmd_tx.send(WlCommand::EnterPhase(active));
+    let _ = cmd_tx.send(WlCommand::EnterScope(active));
 }
 
-fn enter_phase(
-    new_phase: Phase,
+fn enter_scope(
+    new_scope: Scope,
     rules: &[Rule],
     state: &mut DaemonState,
     cmd_tx: &std_mpsc::SyncSender<WlCommand>,
@@ -106,14 +112,18 @@ fn enter_phase(
 ) {
     let exit_actions: Vec<RuleAction> = rules
         .iter()
-        .filter(|r| r.phase == state.current_phase)
+        .filter(|r| r.scope == state.current_scope)
         .filter_map(|r| r.on_exit.clone())
         .collect();
     for action in &exit_actions {
         handle_action(action, state, session);
     }
-    state.current_phase = new_phase;
-    send_phase_rules(new_phase, rules, cmd_tx);
+    state.current_scope = new_scope;
+    send_scope_rules(new_scope, rules, cmd_tx);
+}
+
+fn rule_applies(rule: &Rule, state: &DaemonState) -> bool {
+    rule.scope == state.current_scope
 }
 
 fn handle_event(
@@ -126,23 +136,23 @@ fn handle_event(
     info!("{event}");
     match event {
         Event::IdleTimerFired(i) => {
-            if rules[i].phase == state.current_phase {
+            if rule_applies(&rules[i], state) {
                 handle_action(&rules[i].action, state, session);
             }
         }
         Event::IdleResumed(i) => {
-            if rules[i].phase == state.current_phase {
+            if rule_applies(&rules[i], state) {
                 if let Some(action) = &rules[i].on_exit {
                     handle_action(action, state, session);
                 }
             }
         }
         Event::LogindLock => {
-            enter_phase(Phase::Locked, rules, state, cmd_tx, session);
-            spawn_process(&["swaylock".into()]);
+            enter_scope(Scope::Locked, rules, state, cmd_tx, session);
+            spawn_swaylock(session.clone());
         }
         Event::LogindUnlock => {
-            enter_phase(Phase::Unlocked, rules, state, cmd_tx, session);
+            enter_scope(Scope::Unlocked, rules, state, cmd_tx, session);
         }
     }
 }
@@ -171,6 +181,21 @@ fn handle_action(action: &RuleAction, state: &mut DaemonState, session: &Session
             }
         }
     }
+}
+
+fn spawn_swaylock(session: SessionProxy<'static>) {
+    tokio::spawn(async move {
+        let status = tokio::process::Command::new("swaylock").status().await;
+        match status {
+            Ok(s) if s.success() => {
+                if let Err(e) = session.unlock().await {
+                    warn!("logind Unlock call failed: {e}");
+                }
+            }
+            Ok(s) => warn!("swaylock exited with status {s}"),
+            Err(e) => warn!("swaylock failed to start: {e}"),
+        }
+    });
 }
 
 fn spawn_process(argv: &[String]) {

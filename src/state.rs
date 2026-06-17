@@ -1,6 +1,6 @@
 use std::fmt;
 
-use crate::rules::Phase;
+use crate::rules::Scope;
 
 #[derive(Debug)]
 pub enum Event {
@@ -23,14 +23,14 @@ impl fmt::Display for Event {
 
 pub struct DaemonState {
     pub display_on: bool,
-    pub current_phase: Phase,
+    pub current_scope: Scope,
 }
 
 impl DaemonState {
     pub fn new() -> Self {
         Self {
             display_on: true,
-            current_phase: Phase::Unlocked,
+            current_scope: Scope::Unlocked,
         }
     }
 }

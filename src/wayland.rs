@@ -15,7 +15,7 @@ use wayland_protocols::ext::idle_notify::v1::client::{
 use crate::state::Event;
 
 pub enum WlCommand {
-    EnterPhase(Vec<(usize, Duration)>),
+    EnterScope(Vec<(usize, Duration)>),
 }
 
 pub struct WlState {
@@ -93,8 +93,10 @@ pub fn connect(
 
 fn handle_wl_command(cmd: WlCommand, state: &mut WlState, qh: &QueueHandle<WlState>) {
     match cmd {
-        WlCommand::EnterPhase(rules) => {
-            state.active_notifications.clear();
+        WlCommand::EnterScope(rules) => {
+            for notification in state.active_notifications.drain(..) {
+                notification.destroy();
+            }
 
             let seat = match &state.seat {
                 Some(s) => s,

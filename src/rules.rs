@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub enum Phase {
+pub enum Scope {
     Locked,
     Unlocked,
 }
@@ -17,7 +17,7 @@ pub enum Action {
 
 #[derive(Debug, Clone)]
 pub struct Rule {
-    pub phase: Phase,
+    pub scope: Scope,
     pub timeout: Duration,
     pub action: Action,
     pub on_exit: Option<Action>,
